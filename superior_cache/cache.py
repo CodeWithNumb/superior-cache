@@ -534,11 +534,15 @@ class SuperiorCache:
         self._inflight[key] = future
 
         try:
-            # Support both async and sync loaders
+            # Support both async loaders and lambdas wrapping async functions
             if asyncio.iscoroutinefunction(loader):
                 value = await loader()
             else:
-                value = loader()
+                result = loader()
+                if asyncio.iscoroutine(result):
+                    value = await result
+                else:
+                    value = result
 
             self._loader_execs += 1
             self._emit("loader_execution", {"key": key})
@@ -572,7 +576,11 @@ class SuperiorCache:
                 if asyncio.iscoroutinefunction(loader):
                     value = await loader()
                 else:
-                    value = loader()
+                    result = loader()
+                    if asyncio.iscoroutine(result):
+                        value = await result
+                    else:
+                        value = result
                 await self.set(key, value, ttl=ttl, tags=tags)
                 self._log(f"Background refresh done: '{key}'")
             except Exception as exc:

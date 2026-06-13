@@ -105,7 +105,10 @@ async def _fetch_leaderboard(guild_id: int) -> list:
 
 @bot.event
 async def on_ready():
-    await cache.connect()          # connect to Redis if configured
+    try:
+        await cache.connect()
+    except Exception as e:
+        print(f"⚠️ Redis not available, running in memory-only mode: {e}")
     print(f"✅ Logged in as {bot.user} — SuperiorCache ready!")
 
 # -----------------------------------------------------------------------
