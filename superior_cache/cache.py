@@ -16,6 +16,7 @@ from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .memory_layer import MemoryLayer
+from .predictive_preloader import PredictivePreloader
 from .types import (
     CachePlugin,
     CacheStats,
@@ -113,6 +114,9 @@ class SuperiorCache:
         # Stored loaders for preloading (key → coroutine factory)
         self._loaders: Dict[str, Callable] = {}
 
+        # Predictive preloader — learns A→B access patterns
+        self._preloader = PredictivePreloader(debug=debug)
+
         # Locks held by this instance
         self._locks: Dict[str, LockHandle] = {}
 
@@ -166,6 +170,7 @@ class SuperiorCache:
         if self._redis_layer:
             await self._redis_layer.disconnect()
 
+        self._preloader.destroy()
         self._memory.clear()
         self._log("SuperiorCache destroyed")
 
@@ -264,6 +269,9 @@ class SuperiorCache:
 
         self._loaders[key] = loader
 
+        # Track access pattern for predictive preloading
+        self._preloader.record_access(key)
+
         # Force refresh bypasses all caches
         if force_refresh:
             return await self._execute_and_cache(key, loader, ttl=ttl, tags=tags)
@@ -275,6 +283,7 @@ class SuperiorCache:
             self._emit("hit", {"key": key, "layer": "l1"})
             if refresh_ahead and self._memory.needs_refresh_ahead(key, self._refresh_frac):
                 self._background_refresh(key, loader, ttl=ttl, tags=tags)
+            self._trigger_preloads(key)
             return value
 
         # Stampede: serve stale while refreshing
@@ -292,6 +301,7 @@ class SuperiorCache:
                 self._memory.set(key, value, ttl or self._default_ttl, tags)
                 self._l2_hits += 1
                 self._emit("hit", {"key": key, "layer": "l2"})
+                self._trigger_preloads(key)
                 return value
 
         # Miss → load (with deduplication)
@@ -306,6 +316,7 @@ class SuperiorCache:
         self._deps.clear()
         self._loaders.clear()
         self._refresh_in_progress.clear()
+        self._preloader.clear()
         self._log("Cache cleared")
 
     # ------------------------------------------------------------------
@@ -590,6 +601,16 @@ class SuperiorCache:
                 self._refresh_in_progress.discard(key)
 
         asyncio.create_task(_refresh())
+
+    def _trigger_preloads(self, key: str) -> None:
+        """Background-preload keys frequently accessed after `key`."""
+        targets = self._preloader.get_preload_targets(key)
+        for target in targets:
+            if not self._memory.has(target):
+                loader = self._loaders.get(target)
+                if loader:
+                    self._log(f"Preloading '{target}' (triggered by '{key}')")
+                    self._background_refresh(target, loader)
 
     def _handle_remote_invalidation(self, message: str) -> None:
         """Handle Pub/Sub invalidation from another Redis subscriber."""
