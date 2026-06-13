@@ -44,7 +44,7 @@ On a cache miss, it runs your loader function, caches the result, and returns it
 pip install git+https://github.com/CodeWithNumb/superior-cache
 
 # With Redis support
-pip install "git+https://github.com/CodeWithNumb/superior-cache[redis]"
+pip install "superior-cache[redis] @ git+https://github.com/CodeWithNumb/superior-cache"
 ```
 
 > Redis is optional. The cache works perfectly fine in memory-only mode.
